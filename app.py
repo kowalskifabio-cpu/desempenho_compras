@@ -3,10 +3,10 @@ import pandas as pd
 import numpy as np
 
 # Configuração da página
-st.set_page_config(page_title="Dashboard de Compras e Solicitações", layout="wide")
+st.set_page_config(page_title="Dashboard de Performance de Compras", layout="wide")
 
 st.title("📊 Indicadores de Solicitações e Compras")
-st.markdown("Análise de prazos entre Solicitação, Entrega Desejada e Compra (OC).")
+st.markdown("Análise de volumetria, prazos de entrega e compras urgentes.")
 
 # Função para carregar dados
 @st.cache_data
@@ -17,20 +17,31 @@ def load_data(file):
     else:
         df = pd.read_excel(file)
     
-    # Conversão de colunas para datetime de forma robusta
+    # Conversão de colunas para datetime
     date_cols = ['Data Solicitação', 'Data Entrega', 'Data OC']
     for col in date_cols:
         df[col] = pd.to_datetime(df[col], errors='coerce')
     
-    # Cálculos de Lead Time (Dias)
-    # 1. Dias entre Solicitação e Entrega Desejada
-    df['Dias Solicitação x Entrega'] = (df['Data Entrega'] - df['Data Solicitação']).dt.days
+    # --- CÁLCULOS DE PRAZOS ---
     
-    # 2. Dias entre Solicitação e Compra Efetiva (Data OC)
+    # 1. Prazo Solicitado (Dias entre Solicitação e Entrega Desejada)
+    df['Prazo Solicitado'] = (df['Data Entrega'] - df['Data Solicitação']).dt.days
+    
+    # 2. Dias para Compra (Data Solicitação até Data OC)
     df['Dias Solicitação x OC'] = (df['Data OC'] - df['Data Solicitação']).dt.days
     
-    # 3. Gap entre Entrega Desejada e Data da OC (Atraso na formalização)
+    # 3. Gap de Atraso (OC gerada após a Data de Entrega desejada)
     df['Gap Entrega x OC'] = (df['Data OC'] - df['Data Entrega']).dt.days
+    
+    # --- NOVAS REGRAS DE NEGÓCIO ---
+    
+    # Identifica se foi comprado fora do prazo (OC após Data Entrega)
+    # Somente para itens que já possuem Data OC
+    df['Fora do Prazo'] = df['Gap Entrega x OC'] > 0
+    
+    # Identifica Compras Urgentes (Prazo Solicitado <= 1 dia)
+    # Isso mede a pressão que o solicitante coloca em compras
+    df['Eh Urgente'] = df['Prazo Solicitado'] <= 1
     
     return df
 
@@ -42,66 +53,74 @@ if uploaded_file:
     
     # Filtros laterais
     st.sidebar.header("Filtros")
-    
-    # Garantir que não temos problemas com NAs nos filtros
     status_list = df['Status'].dropna().unique().tolist()
     status_filtro = st.sidebar.multiselect("Filtrar por Status", options=status_list, default=status_list)
-    
     df_filtered = df[df['Status'].isin(status_filtro)].copy()
 
-    # --- MÉTRICAS PRINCIPAIS ---
-    m1, m2, m3 = st.columns(3)
+    # --- CÁLCULO DOS NOVOS INDICADORES ---
+    total_itens = len(df_filtered)
     
-    with m1:
-        avg_sol_ent = df_filtered['Dias Solicitação x Entrega'].mean()
-        st.metric("Média: Solicitação ➔ Entrega", f"{avg_sol_ent:.1f} dias" if not np.isnan(avg_sol_ent) else "N/A")
-        st.caption("Prazo médio pedido pelo solicitante")
-
-    with m2:
-        avg_sol_oc = df_filtered['Dias Solicitação x OC'].mean()
-        st.metric("Média: Solicitação ➔ Compra (OC)", f"{avg_sol_oc:.1f} dias" if not np.isnan(avg_sol_oc) else "N/A")
-        st.caption("Tempo médio para gerar a Ordem de Compra")
-
-    with m3:
-        # Filtramos onde a OC foi gerada após a entrega solicitada
-        atrasos = df_filtered[df_filtered['Gap Entrega x OC'] > 0].shape[0]
-        st.metric("Compras após Data de Entrega", f"{atrasos} itens")
-        st.caption("Casos onde a OC foi gerada após o prazo de entrega solicitado")
-
-    # --- VISUALIZAÇÃO DOS DADOS ---
-    st.subheader("Detalhamento dos Prazos")
+    # 1. Fora do Prazo (Considerando apenas itens com OC emitida)
+    itens_com_oc = df_filtered[df_filtered['Data OC'].notna()]
+    total_com_oc = len(itens_com_oc)
+    fora_prazo_qtd = itens_com_oc['Fora do Prazo'].sum()
+    perc_fora_prazo = (fora_prazo_qtd / total_com_oc * 100) if total_com_oc > 0 else 0
     
-    # Regra visual para destacar linhas onde a OC atrasou em relação à data pedida
-    def highlight_delay(row):
-        color = 'background-color: #ffcccc' if row['Gap Entrega x OC'] > 0 else ''
-        return [color] * len(row)
+    # 2. Urgentes (Prazo solicitado <= 1 dia)
+    urgentes_qtd = df_filtered['Eh Urgente'].sum()
+    perc_urgentes = (urgentes_qtd / total_itens * 100) if total_itens > 0 else 0
 
-    # Exibição da tabela formatada
-    cols_to_show = ['Solicitação', 'Status', 'Descrição', 'Data Solicitação', 'Data Entrega', 'Data OC', 
-                    'Dias Solicitação x Entrega', 'Dias Solicitação x OC', 'Gap Entrega x OC']
+    # --- EXIBIÇÃO DAS MÉTRICAS ---
+    st.subheader("Indicadores de Eficiência e Urgência")
+    c1, c2, c3, c4 = st.columns(4)
+    
+    with c1:
+        st.metric("Total de Itens", f"{total_itens}")
+        st.caption("Volume total na base filtrada")
+
+    with c2:
+        st.metric("Compras Fora do Prazo", f"{fora_prazo_qtd}", f"{perc_fora_prazo:.1f}%", delta_color="inverse")
+        st.caption("OC emitida após Data Entrega")
+
+    with c3:
+        st.metric("Qtd. Compras Urgentes", f"{urgentes_qtd}")
+        st.caption("Prazo solicitado ≤ 1 dia")
+
+    with c4:
+        st.metric("% Urgência", f"{perc_urgentes:.1f}%")
+        st.caption("Impacto de pedidos imediatos")
+
+    # --- DETALHAMENTO ---
+    st.subheader("Análise Detalhada")
+    
+    # Função para destacar Urgências e Atrasos
+    def style_dataframe(row):
+        style = [''] * len(row)
+        if row['Eh Urgente']:
+            style = ['background-color: #fff3cd'] * len(row) # Amarelo para urgente
+        if row['Gap Entrega x OC'] > 0:
+            style = ['background-color: #f8d7da'] * len(row) # Vermelho para atraso
+        return style
+
+    cols_view = ['Solicitação', 'Status', 'Descrição', 'Data Solicitação', 'Data Entrega', 
+                 'Data OC', 'Prazo Solicitado', 'Gap Entrega x OC', 'Eh Urgente']
     
     st.dataframe(
-        df_filtered[cols_to_show].style.apply(highlight_delay, axis=1),
+        df_filtered[cols_view].style.apply(style_dataframe, axis=1),
         use_container_width=True
     )
 
-    # --- GRÁFICOS (Correção do Erro de Resample) ---
-    st.subheader("Análise Temporal de Lead Time de Compra")
-    
-    # Para o gráfico, precisamos remover datas nulas na 'Data Solicitação' e usar a nova frequência 'ME'
+    # --- GRÁFICO DE TENDÊNCIA ---
+    st.subheader("Evolução de Pedidos Urgentes por Mês")
     df_chart = df_filtered.dropna(subset=['Data Solicitação']).copy()
-    
     if not df_chart.empty:
-        # 'ME' é a nova sigla para Month End no Pandas 2.2+
         try:
-            chart_data = df_chart.set_index('Data Solicitação')[['Dias Solicitação x OC']].resample('ME').mean()
-            st.line_chart(chart_data)
-        except ValueError:
-            # Fallback para 'M' caso esteja em uma versão muito antiga (raro no Streamlit Cloud)
-            chart_data = df_chart.set_index('Data Solicitação')[['Dias Solicitação x OC']].resample('M').mean()
-            st.line_chart(chart_data)
-    else:
-        st.warning("Sem dados temporais suficientes para gerar o gráfico.")
+            # Agrupando por mês (frequência ME para versões novas do pandas)
+            urgentes_mensal = df_chart.set_index('Data Solicitação')['Eh Urgente'].resample('ME').sum()
+            st.area_chart(urgentes_mensal)
+        except:
+            urgentes_mensal = df_chart.set_index('Data Solicitação')['Eh Urgente'].resample('M').sum()
+            st.area_chart(urgentes_mensal)
 
 else:
-    st.info("Aguardando upload da planilha para gerar indicadores.")
+    st.info("Aguardando upload da planilha.")
