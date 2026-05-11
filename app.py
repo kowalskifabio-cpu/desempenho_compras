@@ -6,7 +6,7 @@ import numpy as np
 st.set_page_config(page_title="Dashboard de Performance de Compras", layout="wide")
 
 st.title("📊 Indicadores de Solicitações e Compras")
-st.markdown("Análise de volumetria, prazos de entrega e compras urgentes.")
+st.markdown("Análise de volumetria, prazos de entrega e compras urgentes por solicitante.")
 
 # Função para carregar dados
 @st.cache_data
@@ -33,14 +33,12 @@ def load_data(file):
     # 3. Gap de Atraso (OC gerada após a Data de Entrega desejada)
     df['Gap Entrega x OC'] = (df['Data OC'] - df['Data Entrega']).dt.days
     
-    # --- NOVAS REGRAS DE NEGÓCIO ---
+    # --- REGRAS DE NEGÓCIO ---
     
     # Identifica se foi comprado fora do prazo (OC após Data Entrega)
-    # Somente para itens que já possuem Data OC
     df['Fora do Prazo'] = df['Gap Entrega x OC'] > 0
     
     # Identifica Compras Urgentes (Prazo Solicitado <= 1 dia)
-    # Isso mede a pressão que o solicitante coloca em compras
     df['Eh Urgente'] = df['Prazo Solicitado'] <= 1
     
     return df
@@ -51,13 +49,25 @@ uploaded_file = st.file_uploader("Arraste aqui sua planilha 'solicitações e co
 if uploaded_file:
     df = load_data(uploaded_file)
     
-    # Filtros laterais
-    st.sidebar.header("Filtros")
-    status_list = df['Status'].dropna().unique().tolist()
+    # --- FILTROS LATERAIS ---
+    st.sidebar.header("Filtros de Pesquisa")
+    
+    # Filtro de Status
+    status_list = sorted(df['Status'].dropna().unique().tolist())
     status_filtro = st.sidebar.multiselect("Filtrar por Status", options=status_list, default=status_list)
-    df_filtered = df[df['Status'].isin(status_filtro)].copy()
+    
+    # NOVO: Filtro de Solicitante
+    # Removemos nulos e ordenamos para facilitar a busca
+    solicitante_list = sorted(df['Solicitante'].dropna().unique().tolist())
+    solicitante_filtro = st.sidebar.multiselect("Filtrar por Solicitante", options=solicitante_list, default=solicitante_list)
+    
+    # Aplicação dos Filtros Cruzados
+    df_filtered = df[
+        (df['Status'].isin(status_filtro)) & 
+        (df['Solicitante'].isin(solicitante_filtro))
+    ].copy()
 
-    # --- CÁLCULO DOS NOVOS INDICADORES ---
+    # --- CÁLCULO DOS INDICADORES ---
     total_itens = len(df_filtered)
     
     # 1. Fora do Prazo (Considerando apenas itens com OC emitida)
@@ -76,7 +86,7 @@ if uploaded_file:
     
     with c1:
         st.metric("Total de Itens", f"{total_itens}")
-        st.caption("Volume total na base filtrada")
+        st.caption("Volume na seleção atual")
 
     with c2:
         st.metric("Compras Fora do Prazo", f"{fora_prazo_qtd}", f"{perc_fora_prazo:.1f}%", delta_color="inverse")
@@ -102,7 +112,7 @@ if uploaded_file:
             style = ['background-color: #f8d7da'] * len(row) # Vermelho para atraso
         return style
 
-    cols_view = ['Solicitação', 'Status', 'Descrição', 'Data Solicitação', 'Data Entrega', 
+    cols_view = ['Solicitação', 'Solicitante', 'Status', 'Descrição', 'Data Solicitação', 'Data Entrega', 
                  'Data OC', 'Prazo Solicitado', 'Gap Entrega x OC', 'Eh Urgente']
     
     st.dataframe(
@@ -121,6 +131,8 @@ if uploaded_file:
         except:
             urgentes_mensal = df_chart.set_index('Data Solicitação')['Eh Urgente'].resample('M').sum()
             st.area_chart(urgentes_mensal)
+    else:
+        st.warning("Sem dados temporais para o filtro selecionado.")
 
 else:
     st.info("Aguardando upload da planilha.")
