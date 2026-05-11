@@ -94,23 +94,33 @@ if uploaded_file:
     with c3: st.metric("Qtd. Urgentes", urgentes_qtd)
     with c4: st.metric("% Urgência", f"{perc_urgentes:.1f}%")
 
-    # --- NOVO INDICADOR: RANKING DE SOLICITANTES ---
+    # --- RANKING DE SOLICITANTES ---
     st.subheader("🏆 Ranking de Solicitantes")
-    
-    # Agrupamento para o ranking
     ranking = df_filtered.groupby('Solicitante').agg(
         Qtd_Itens=('Solicitação', 'count'),
         Urgentes=('Eh Urgente', 'sum'),
         Fora_do_Prazo=('Fora do Prazo', 'sum')
     ).sort_values(by='Qtd_Itens', ascending=False)
     
-    # Adicionando percentual de urgência por solicitante para análise mais profunda
     ranking['% Urgência'] = (ranking['Urgentes'] / ranking['Qtd_Itens'] * 100).map('{:.1f}%'.format)
-    
     st.table(ranking)
 
+    # --- GRÁFICO DE TENDÊNCIA DE URGÊNCIAS (REINTEGRADO) ---
+    st.subheader("📈 Evolução de Pedidos Urgentes")
+    df_chart = df_filtered.dropna(subset=['Data Solicitação']).copy()
+    if not df_chart.empty:
+        try:
+            # Usando 'ME' para compatibilidade com Pandas 2.2+
+            urgentes_mensal = df_chart.set_index('Data Solicitação')['Eh Urgente'].resample('ME').sum()
+            st.area_chart(urgentes_mensal)
+        except:
+            urgentes_mensal = df_chart.set_index('Data Solicitação')['Eh Urgente'].resample('M').sum()
+            st.area_chart(urgentes_mensal)
+    else:
+        st.warning("Sem dados temporais para gerar o gráfico de urgências.")
+
     # --- DETALHAMENTO ---
-    st.subheader("Análise Detalhada (Lista)")
+    st.subheader("📑 Análise Detalhada (Lista)")
     
     def style_dataframe(row):
         style = [''] * len(row)
